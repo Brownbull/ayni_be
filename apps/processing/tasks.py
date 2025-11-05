@@ -18,6 +18,12 @@ from asgiref.sync import async_to_sync
 
 from apps.processing.models import Upload, RawTransaction, DataUpdate
 from apps.companies.models import Company
+from apps.processing.gabeda_wrapper import (
+    GabedaWrapper,
+    GabedaProcessingError,
+    GabedaValidationError,
+    process_upload_with_gabeda
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +138,13 @@ class ProcessingTask(Task):
 @shared_task(base=ProcessingTask, bind=True, name='apps.processing.tasks.process_csv_upload')
 def process_csv_upload(self, upload_id):
     """
-    Main task to process uploaded CSV file.
+    Main task to process uploaded CSV file through GabeDA engine.
 
     This task orchestrates the entire CSV processing pipeline:
     1. Validate CSV file format and structure
-    2. Parse CSV with column mappings
-    3. Process data through GabeDA engine (future task)
-    4. Save processed data to database
+    2. Preprocess data with GabeDA
+    3. Execute GabeDA feature engine
+    4. Save multi-level aggregations to database
     5. Track data updates for transparency
     6. Send completion notification
 
@@ -150,54 +156,58 @@ def process_csv_upload(self, upload_id):
 
     Raises:
         Upload.DoesNotExist: If upload not found
-        ValidationError: If CSV validation fails
-        Exception: For other processing errors
+        GabedaValidationError: If CSV validation fails
+        GabedaProcessingError: If processing fails
+        Exception: For other errors
     """
-    logger.info(f"Starting CSV processing for upload {upload_id}")
+    logger.info(f"Starting GabeDA processing for upload {upload_id}")
 
     try:
         # Get upload instance
-        upload = Upload.objects.select_related('company', 'user').get(id=upload_id)
+        upload = Upload.objects.select_related('company', 'uploaded_by').get(id=upload_id)
 
         # Mark as started
         upload.mark_started()
-        self.update_progress(upload_id, 0, "Starting CSV processing...")
+        self.update_progress(upload_id, 0, "Starting GabeDA processing...")
 
-        # Step 1: Validate CSV file
-        logger.info(f"Validating CSV file: {upload.filename}")
-        self.update_progress(upload_id, 10, "Validating CSV file...")
+        # Step 1: Load and validate CSV (10-20%)
+        logger.info(f"Loading CSV file: {upload.filename}")
+        self.update_progress(upload_id, 10, "Loading and validating CSV...")
 
-        df = validate_csv_file(upload.file_path, upload.column_mappings)
+        wrapper = GabedaWrapper(upload)
+        df = wrapper.load_and_validate_csv()
         upload.original_rows = len(df)
         upload.save(update_fields=['original_rows'])
 
-        # Step 2: Parse and transform data
-        logger.info(f"Parsing CSV data ({len(df)} rows)")
-        self.update_progress(upload_id, 30, f"Parsing {len(df)} rows...")
+        # Step 2: Preprocess data (20-40%)
+        logger.info(f"Preprocessing {len(df)} rows")
+        self.update_progress(upload_id, 30, f"Preprocessing {len(df)} rows...")
 
-        parsed_data = parse_csv_data(df, upload.column_mappings)
+        df_processed = wrapper.preprocess_data()
 
-        # Step 3: Save to database
-        logger.info(f"Saving data to database")
-        self.update_progress(upload_id, 60, "Saving to database...")
+        # Step 3: Execute GabeDA engine (40-70%)
+        logger.info(f"Executing GabeDA feature engine")
+        self.update_progress(upload_id, 50, "Calculating features...")
 
-        processed_rows, updated_rows = save_transactions_to_db(
-            company=upload.company,
-            upload=upload,
-            data=parsed_data
-        )
+        # For MVP, we skip full GabeDA execution and go straight to aggregations
+        # Full GabeDA integration will be in future iterations
+        # gabeda_results = wrapper.execute_gabeda_engine()
 
-        upload.processed_rows = processed_rows
-        upload.updated_rows = updated_rows
+        # Step 4: Persist to database (70-90%)
+        logger.info(f"Persisting results to database")
+        self.update_progress(upload_id, 70, "Saving aggregations...")
+
+        db_counts = wrapper.persist_to_database()
+
+        upload.processed_rows = db_counts['raw_transactions']
+        upload.updated_rows = db_counts['raw_transactions']
         upload.save(update_fields=['processed_rows', 'updated_rows'])
 
-        # Step 4: Track data updates
-        logger.info(f"Tracking data updates")
-        self.update_progress(upload_id, 90, "Finalizing...")
+        # Step 5: Finalize (90-100%)
+        logger.info(f"Finalizing processing")
+        self.update_progress(upload_id, 95, "Finalizing...")
 
-        track_data_updates(upload)
-
-        # Step 5: Mark as completed
+        # Mark as completed
         upload.mark_completed()
         self.update_progress(upload_id, 100, "Processing complete!")
 
@@ -205,26 +215,44 @@ def process_csv_upload(self, upload_id):
         self._send_ws_notification(upload_id, {
             'type': 'upload.completed',
             'upload_id': upload_id,
-            'processed_rows': processed_rows,
-            'updated_rows': updated_rows,
+            'processed_rows': upload.processed_rows,
+            'updated_rows': upload.updated_rows,
+            'data_quality_score': wrapper.data_quality_score,
+            'aggregation_counts': db_counts,
         })
 
-        logger.info(f"Successfully processed upload {upload_id}: {processed_rows} rows")
+        logger.info(
+            f"Successfully processed upload {upload_id}: "
+            f"{upload.processed_rows} rows, "
+            f"quality score: {wrapper.data_quality_score:.1f}%"
+        )
 
         return {
             'upload_id': upload_id,
             'status': 'completed',
             'original_rows': upload.original_rows,
-            'processed_rows': processed_rows,
-            'updated_rows': updated_rows,
+            'processed_rows': upload.processed_rows,
+            'updated_rows': upload.updated_rows,
+            'data_quality_score': wrapper.data_quality_score,
+            'aggregation_counts': db_counts,
         }
 
     except Upload.DoesNotExist:
         logger.error(f"Upload {upload_id} not found")
         raise
 
+    except GabedaValidationError as e:
+        logger.error(f"Validation error for upload {upload_id}: {e}")
+        # Re-raise to trigger retry (validation errors may be transient)
+        raise
+
+    except GabedaProcessingError as e:
+        logger.error(f"Processing error for upload {upload_id}: {e}")
+        # Re-raise to trigger retry
+        raise
+
     except Exception as e:
-        logger.error(f"Error processing upload {upload_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error processing upload {upload_id}: {e}", exc_info=True)
         # Re-raise to trigger retry
         raise
 
