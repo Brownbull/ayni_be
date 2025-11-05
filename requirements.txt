@@ -1,0 +1,51 @@
+# AYNI Backend - Python Dependencies
+# Core Framework
+Django==5.0.1
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+
+# Authentication & Security
+djangorestframework-simplejwt==5.3.1
+django-allauth==0.57.0
+argon2-cffi==23.1.0
+
+# Database
+psycopg2-binary==2.9.9
+dj-database-url==2.1.0
+
+# Async Tasks
+celery==5.3.4
+redis==5.0.1
+
+# WebSocket Support
+channels==4.0.0
+channels-redis==4.1.0
+daphne==4.0.0
+
+# File Handling
+pandas==2.1.4
+openpyxl==3.1.2
+
+# Environment Management
+python-decouple==3.8
+
+# API Documentation
+drf-spectacular==0.27.0
+
+# Testing
+pytest==7.4.3
+pytest-django==4.7.0
+pytest-cov==4.1.0
+factory-boy==3.3.0
+
+# Code Quality
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+
+# Monitoring
+sentry-sdk==1.39.2
+
+# Development
+ipython==8.19.0
+django-debug-toolbar==4.2.0
