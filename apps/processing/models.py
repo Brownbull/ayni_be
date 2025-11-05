@@ -128,6 +128,46 @@ class Upload(models.Model):
         self.progress_percentage = min(100, max(0, percentage))
         self.save(update_fields=['progress_percentage'])
 
+    @classmethod
+    def has_active_upload(cls, company):
+        """
+        Check if company has any active uploads in progress.
+
+        An upload is considered "active" if it's in one of these states:
+        - pending (queued for processing)
+        - validating (being validated)
+        - processing (actively processing)
+
+        This ensures only one upload per company can be processed at a time,
+        preventing resource exhaustion and ensuring fair processing.
+
+        Args:
+            company: Company instance
+
+        Returns:
+            bool: True if company has an active upload, False otherwise
+        """
+        return cls.objects.filter(
+            company=company,
+            status__in=['pending', 'validating', 'processing']
+        ).exists()
+
+    @classmethod
+    def get_active_upload(cls, company):
+        """
+        Get the currently active upload for a company.
+
+        Args:
+            company: Company instance
+
+        Returns:
+            Upload instance or None if no active upload
+        """
+        return cls.objects.filter(
+            company=company,
+            status__in=['pending', 'validating', 'processing']
+        ).first()
+
 
 class ColumnMapping(models.Model):
     """

@@ -79,6 +79,24 @@ class UploadViewSet(viewsets.ModelViewSet):
         company_id = validated_data['company']
         column_mappings = validated_data['column_mappings']
 
+        # BUSINESS RULE: One upload per company at a time
+        # This prevents resource exhaustion and ensures fair processing
+        # Maximum concurrent uploads = number of unique registered companies
+        if Upload.has_active_upload(company_id):
+            active_upload = Upload.get_active_upload(company_id)
+            return Response(
+                {
+                    'error': 'Upload already in progress',
+                    'detail': 'This company already has an upload being processed. '
+                              'Please wait for it to complete before uploading another file.',
+                    'active_upload_id': active_upload.id,
+                    'active_upload_status': active_upload.status,
+                    'active_upload_progress': active_upload.progress_percentage,
+                    'active_upload_filename': active_upload.filename,
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+
         try:
             # Generate unique filename
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
