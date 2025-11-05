@@ -1,9 +1,18 @@
 """
 Processing URLs
-To be implemented in later tasks
+
+Endpoints for CSV upload, processing, and data management.
 """
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from . import views
+
+router = DefaultRouter()
+router.register(r"uploads", views.UploadViewSet, basename="upload")
+router.register(r"mappings", views.ColumnMappingViewSet, basename="mapping")
+router.register(r"transactions", views.RawTransactionViewSet, basename="transaction")
+router.register(r"updates", views.DataUpdateViewSet, basename="dataupdate")
 
 urlpatterns = [
-    # Will be populated in later tasks
+    path("", include(router.urls)),
 ]
