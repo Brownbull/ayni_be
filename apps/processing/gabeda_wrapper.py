@@ -55,6 +55,7 @@ from apps.processing.models import (
     RawTransaction,
     DataUpdate
 )
+from apps.processing.update_tracker import UpdateTracker
 from apps.analytics.models import (
     DailyAggregation,
     WeeklyAggregation,
@@ -597,16 +598,74 @@ class GabedaWrapper:
         return len(aggregations)
 
     def _track_data_update(self, counts: Dict[str, int]):
-        """Create data update tracking record."""
-        DataUpdate.objects.create(
-            company=self.company,
-            upload=self.upload,
-            period='upload',
-            rows_before=0,  # TODO: Count existing rows
-            rows_after=counts['raw_transactions'],
-            rows_updated=counts['raw_transactions'],
-            user=self.upload.uploaded_by
-        )
+        """
+        Create comprehensive data update tracking record.
+
+        Uses UpdateTracker to properly count existing rows before and after
+        the update, providing full transparency of data changes.
+
+        Args:
+            counts: Dict of row counts by aggregation level
+
+        Returns:
+            DataUpdate: Created update record
+        """
+        try:
+            # Initialize update tracker
+            tracker = UpdateTracker(
+                company=self.company,
+                upload=self.upload,
+                user=self.upload.uploaded_by
+            )
+
+            # Since we're calling this after persist_to_database(),
+            # we need to retroactively calculate before counts
+            tracker.before_counts = {
+                'raw_transactions': RawTransaction.objects.filter(
+                    company=self.company
+                ).exclude(upload=self.upload).count(),
+                'daily_aggregations': 0,  # MVP: Will implement in future
+                'monthly_aggregations': 0,
+                'product_aggregations': 0,
+            }
+
+            # Current counts as after
+            tracker.after_counts = {
+                'raw_transactions': RawTransaction.objects.filter(
+                    company=self.company
+                ).count(),
+                'daily_aggregations': counts.get('daily_aggregations', 0),
+                'monthly_aggregations': counts.get('monthly_aggregations', 0),
+                'product_aggregations': counts.get('product_aggregations', 0),
+            }
+
+            # Create comprehensive update record
+            update_record = tracker.create_update_record()
+
+            logger.info(
+                f"Update tracking complete: {update_record.rows_added} rows added, "
+                f"{update_record.rows_updated} rows updated"
+            )
+
+            return update_record
+
+        except Exception as e:
+            logger.error(f"Update tracking failed: {e}")
+            # Don't fail the entire process if tracking fails
+            # Fall back to simple tracking
+            return DataUpdate.objects.create(
+                company=self.company,
+                upload=self.upload,
+                period='upload',
+                period_type='daily',
+                rows_before=0,
+                rows_after=counts['raw_transactions'],
+                rows_updated=0,
+                rows_added=counts['raw_transactions'],
+                rows_deleted=0,
+                user=self.upload.uploaded_by,
+                changes_summary={'error': str(e)}
+            )
 
     def process_complete_pipeline(self) -> Dict[str, Any]:
         """
