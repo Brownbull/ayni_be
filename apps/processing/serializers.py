@@ -225,7 +225,7 @@ class RawTransactionSerializer(serializers.ModelSerializer):
             'cost_total',
             'processed_at',
         ]
-        read_only_fields = '__all__'
+        read_only_fields = fields  # All fields are read-only
 
 
 class DataUpdateSerializer(serializers.ModelSerializer):
@@ -261,4 +261,4 @@ class DataUpdateSerializer(serializers.ModelSerializer):
             'changes_summary',
             'timestamp',
         ]
-        read_only_fields = '__all__'
+        read_only_fields = fields  # All fields are read-only
