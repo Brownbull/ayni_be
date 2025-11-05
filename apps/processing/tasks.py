@@ -24,6 +24,12 @@ from apps.processing.gabeda_wrapper import (
     GabedaValidationError,
     process_upload_with_gabeda
 )
+from apps.processing.consumers import (
+    send_progress_update,
+    send_status_update,
+    send_error_notification,
+    send_completion_notification
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +75,12 @@ class ProcessingTask(Task):
                 upload = Upload.objects.get(id=upload_id)
                 upload.mark_failed(str(exc))
 
-                # Send WebSocket notification
-                self._send_ws_notification(upload.id, {
-                    'type': 'upload.failed',
-                    'upload_id': upload.id,
-                    'error': str(exc),
-                })
+                # Send WebSocket error notification
+                send_error_notification(
+                    upload_id=upload.id,
+                    message="Upload processing failed",
+                    details=str(exc)
+                )
             except Upload.DoesNotExist:
                 logger.error(f"Upload {upload_id} not found for failure handling")
 
@@ -124,13 +130,12 @@ class ProcessingTask(Task):
             upload = Upload.objects.get(id=upload_id)
             upload.update_progress(percentage)
 
-            # Send WebSocket notification
-            self._send_ws_notification(upload_id, {
-                'type': 'upload.progress',
-                'upload_id': upload_id,
-                'progress': percentage,
-                'message': message or f"Processing: {percentage}%",
-            })
+            # Send WebSocket progress notification using new helper
+            send_progress_update(
+                upload_id=upload_id,
+                percent=percentage,
+                message=message or f"Processing: {percentage}%"
+            )
         except Upload.DoesNotExist:
             logger.error(f"Upload {upload_id} not found for progress update")
 
@@ -168,10 +173,12 @@ def process_csv_upload(self, upload_id):
 
         # Mark as started
         upload.mark_started()
+        send_status_update(upload_id, 'processing', 'Starting GabeDA processing...')
         self.update_progress(upload_id, 0, "Starting GabeDA processing...")
 
         # Step 1: Load and validate CSV (10-20%)
         logger.info(f"Loading CSV file: {upload.filename}")
+        send_status_update(upload_id, 'validating', 'Loading and validating CSV...')
         self.update_progress(upload_id, 10, "Loading and validating CSV...")
 
         wrapper = GabedaWrapper(upload)
@@ -181,12 +188,14 @@ def process_csv_upload(self, upload_id):
 
         # Step 2: Preprocess data (20-40%)
         logger.info(f"Preprocessing {len(df)} rows")
+        send_status_update(upload_id, 'processing', f'Preprocessing {len(df)} rows...')
         self.update_progress(upload_id, 30, f"Preprocessing {len(df)} rows...")
 
         df_processed = wrapper.preprocess_data()
 
         # Step 3: Execute GabeDA engine (40-70%)
         logger.info(f"Executing GabeDA feature engine")
+        send_status_update(upload_id, 'processing', 'Calculating features...')
         self.update_progress(upload_id, 50, "Calculating features...")
 
         # For MVP, we skip full GabeDA execution and go straight to aggregations
@@ -195,6 +204,7 @@ def process_csv_upload(self, upload_id):
 
         # Step 4: Persist to database (70-90%)
         logger.info(f"Persisting results to database")
+        send_status_update(upload_id, 'processing', 'Saving aggregations to database...')
         self.update_progress(upload_id, 70, "Saving aggregations...")
 
         db_counts = wrapper.persist_to_database()
@@ -205,21 +215,26 @@ def process_csv_upload(self, upload_id):
 
         # Step 5: Finalize (90-100%)
         logger.info(f"Finalizing processing")
+        send_status_update(upload_id, 'processing', 'Finalizing upload...')
         self.update_progress(upload_id, 95, "Finalizing...")
 
         # Mark as completed
         upload.mark_completed()
+        send_status_update(upload_id, 'completed', 'Upload processing complete!')
         self.update_progress(upload_id, 100, "Processing complete!")
 
         # Send success notification
-        self._send_ws_notification(upload_id, {
-            'type': 'upload.completed',
-            'upload_id': upload_id,
-            'processed_rows': upload.processed_rows,
-            'updated_rows': upload.updated_rows,
-            'data_quality_score': wrapper.data_quality_score,
-            'aggregation_counts': db_counts,
-        })
+        send_completion_notification(
+            upload_id=upload_id,
+            message="Upload processing complete!",
+            results={
+                'upload_id': upload_id,
+                'processed_rows': upload.processed_rows,
+                'updated_rows': upload.updated_rows,
+                'data_quality_score': wrapper.data_quality_score,
+                'aggregation_counts': db_counts,
+            }
+        )
 
         logger.info(
             f"Successfully processed upload {upload_id}: "
