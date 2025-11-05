@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     # Third-party apps
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'channels',
     'drf_spectacular',
@@ -99,7 +100,9 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
 ]
 
-# Custom User ModelAUTH_USER_MODEL = 'authentication.User'
+# Custom User Model
+AUTH_USER_MODEL = 'authentication.User'
+
 # Internationalization
 LANGUAGE_CODE = 'es-cl'
 TIME_ZONE = 'America/Santiago'
